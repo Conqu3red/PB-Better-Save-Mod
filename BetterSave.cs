@@ -25,7 +25,7 @@ namespace BetterSave
             PluginVersion = "1.0.0";
 
         public static BetterSave instance;
-        public static ConfigEntry<bool> modEnabled;
+        public static ConfigEntry<bool> modEnabled, openLastFolder;
         public static MethodInfo
             SandboxLoad_LocalSlotClickedCallback,
             SandboxLoad_SlotHoverCallback,
@@ -48,7 +48,8 @@ namespace BetterSave
             isCheat = false;
 
             modEnabled = Config.Bind("Better Save Mod", "modEnabled", true, "Enable Mod");
-
+            openLastFolder = Config.Bind("Better Save Mod", "Open Last Folder", true);
+            
             modEnabled.SettingChanged += onEnableDisable;
 
             harmony = new Harmony("PolyTech.BetterSave");
@@ -125,11 +126,14 @@ namespace BetterSave
         }
 
         public class SlotFolder {
+            public static string displayFormat = "<b>[{0}]</b>";
             public GameObject FileLoaderObj;
             public Panel_FileLoader m_FileLoader;
             public Panel_FileLoader m_ParentFileLoader = null;
             public DirectoryInfo directoryInfo;
-            public string relativePath;
+            public string absolutePath => directoryInfo.FullName;
+            public string Name => directoryInfo.Name;
+            
             public bool isPopulated = false;
 
             public SlotFolder(bool isSave = false)
@@ -142,11 +146,82 @@ namespace BetterSave
                 m_FileLoader = FileLoaderObj.GetComponent<Panel_FileLoader>();
             }
 
-            public SlotFolder(Panel_FileLoader parent, DirectoryInfo directoryInfo, string relativePath, bool isSave = false) : this(isSave) {
+            public SlotFolder(Panel_FileLoader parent, DirectoryInfo directoryInfo, bool isSave = false) : this(isSave) {
                 this.m_ParentFileLoader = parent;
                 this.directoryInfo = directoryInfo;
-                this.relativePath = relativePath;
             }
+        }
+
+        public static void RenameSlot(FileSlot slot) {
+            PopupInputField.Display(
+                Localize.Get("POPUP_RENAME_SLOT", slot.m_DisplayName.text),
+                slot.m_DisplayName.text,
+                name => {
+                    if (string.IsNullOrEmpty(name)) return;
+                    string oldPath = slot.m_FileName;
+                    string newPath = Path.Combine(
+                        Path.GetDirectoryName(slot.m_FileName),
+                        (Path.GetExtension(name) == SandboxLayout.SAVE_EXTENSION)
+                        ? name
+                        : (name + SandboxLayout.SAVE_EXTENSION)
+                    );
+
+                    Utils.RenameFile(oldPath, newPath);
+
+                    slot.m_DisplayName.text = name;
+                    
+                } 
+            );
+        }
+        public static void DeleteSlot(FileSlot slot, SlotFolder slotFolder) {
+            PopUpMessage.Display(
+                Localize.Get("POPUP_DELETE_SLOT", slot.m_DisplayName.text),
+                () => {
+                    Utils.DeleteFile(slot.m_FileName);
+                    slotFolder.m_FileLoader.DeleteSlot(slot);
+                }
+            );
+        }
+
+        public static void RenameFolder(FileSlot slot, SlotFolder slotFolder) {
+            var dirInfo = new DirectoryInfo(slot.m_FileName);
+
+            PopupInputField.Display(
+                Localize.Get("POPUP_RENAME_SLOT", slot.m_DisplayName.text),
+                dirInfo.Name,
+                name => {
+                    if (string.IsNullOrEmpty(name)) return;
+                    string newPath = Path.Combine(
+                        dirInfo.Parent.FullName,
+                        name
+                    );
+
+                    instance.Logger.LogInfo($"Old: {dirInfo.FullName}");
+                    instance.Logger.LogInfo($"New: {newPath}");
+
+                    if (Directory.Exists(newPath)) {
+                        PopUpWarning.Display("That folder name already exists.");
+                        return;
+                    }
+
+                    dirInfo.MoveTo(newPath);
+                    slotFolder.directoryInfo = new DirectoryInfo(newPath); // update to new location
+                    slot.m_FileName = newPath;
+                    
+                    slot.m_DisplayName.text = string.Format(SlotFolder.displayFormat, name);
+                } 
+            );
+        }
+
+        public static void DeleteFolder(FileSlot slot, SlotFolder slotFolder) {
+            var dirInfo = new DirectoryInfo(slot.m_FileName);
+            PopUpMessage.Display(
+                Localize.Get("POPUP_DELETE_SLOT", slot.m_DisplayName.text),
+                () => {
+                    dirInfo.Delete();
+                    slotFolder.m_ParentFileLoader.DeleteSlot(slot);
+                }
+            );
         }
 
 
@@ -154,18 +229,19 @@ namespace BetterSave
         {
             public static DateTime FarFuture = new DateTime(9999, 1, 1);
             public static Dictionary<FileSlot, SlotFolder> m_FolderLookup = new Dictionary<FileSlot, SlotFolder>();
+            public static FileSlot m_OpenSlot = null;
             public static FileSlot.OnHoverChangeDelegate hoverDelegate = new FileSlot.OnHoverChangeDelegate((slot, hover) => SandboxLoad_SlotHoverCallback.Invoke(GameUI.m_Instance.m_LoadSandboxLayout, new object[] {slot, hover}));
             public static void setEditButtons(FileSlot slot, bool v)
             {
                 slot.m_RenameButton.gameObject.SetActive(v);
                 slot.m_DeleteButton.gameObject.SetActive(v);
             }
-            public static void createHeadingSlots(SlotFolder folder, string folderPath)
+            public static void createHeadingSlots(SlotFolder folder)
             {
                 FileSlot folderListing = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.absolutePath,
                     FarFuture.Ticks,
-                    $"\u200B\u200B\u200B<b>{folderPath}</b>",
+                    $"\u200B\u200B\u200B<b>{folder.Name}</b>",
                     (slot) => {},
                     (slot, hover) => {}
                 );
@@ -173,7 +249,7 @@ namespace BetterSave
                 setEditButtons(folderListing, false);
 
                 FileSlot refreshButton = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.absolutePath,
                     FarFuture.Ticks - 1,
                     "\u200B\u200B<color=yellow>Refresh</color>",
                     (slot) => {
@@ -187,7 +263,7 @@ namespace BetterSave
                 setEditButtons(folderListing, false);
 
                 FileSlot backButton = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.absolutePath,
                     FarFuture.Ticks - 2,
                     "\u200B<color=yellow>Back</color>",
                     (slot) => {
@@ -200,7 +276,7 @@ namespace BetterSave
                 setEditButtons(backButton, false);
             }
 
-            public static SlotFolder CreateFolder(DirectoryInfo directoryInfo, string folderPath, Panel_FileLoader parentFolder)
+            public static SlotFolder CreateFolder(DirectoryInfo directoryInfo, Panel_FileLoader parentFolder)
             {
                 if (parentFolder == null)
                 {
@@ -210,38 +286,34 @@ namespace BetterSave
                 instance.Logger.LogInfo($"scanning dir '{directoryInfo.Name}'");
                 //Debug.Log($"{directoryInfo == null} {parentFolder == null} {GameUI.m_Instance.m_LoadSandboxLayout == null}");
                 
-                var LocalSlotClickedCallback = new FileSlot.OnClickedDelegate(slot => {
+                var FolderOpenedCallback = new FileSlot.OnClickedDelegate(slot => {
                     if (!slot) return;
                     InterfaceAudio.Play("ui_menu_select");
                     LoadHandler.SetContents(slot, GameUI.m_Instance.m_LoadSandboxLayout); // "open" the folder
+                    m_OpenSlot = slot;
                 });
 
-                var SlotHoverCallback = new FileSlot.OnHoverChangeDelegate((slot, hover) => {
+                var FolderHoverCallback = new FileSlot.OnHoverChangeDelegate((slot, hover) => {
                     SandboxLoad_SlotHoverCallback.Invoke(GameUI.m_Instance.m_LoadSandboxLayout, new object[] {slot, hover});
                 });
 
-                var SlotDeleteCallback = new FileSlot.OnClickedDelegate(slot => {}); // TODO!!!
-                var SlotRenameCallback = new FileSlot.OnClickedDelegate(slot => {}); // TODO!!!
-
                 // make FolderSlot for this folder
                 FileSlot folderSlot = parentFolder.AddSlot(
-                    Path.Combine(folderPath, directoryInfo.Name),
+                    directoryInfo.FullName,
                     directoryInfo.LastWriteTime.Ticks,
-                    $"<b>[{directoryInfo.Name}]</b>",
-                    LocalSlotClickedCallback,
-                    SlotHoverCallback
+                    string.Format(SlotFolder.displayFormat, directoryInfo.Name),
+                    FolderOpenedCallback,
+                    FolderHoverCallback
                 );
-
-                folderPath = Path.Combine(folderPath, directoryInfo.Name);
 
                 if (folderSlot)
                 {
-                    folderSlot.SetOnDeleteCallback(SlotDeleteCallback); // TODO
-                    folderSlot.SetOnRenameCallback(SlotRenameCallback); // TODO
+                    folderSlot.SetOnDeleteCallback(slot => DeleteFolder(slot, m_FolderLookup[folderSlot]));
+                    folderSlot.SetOnRenameCallback(slot => RenameFolder(slot, m_FolderLookup[folderSlot]));
 
-                    setEditButtons(folderSlot, false);
+                    setEditButtons(folderSlot, true);
 
-                    m_FolderLookup[folderSlot] = new SlotFolder(parentFolder, directoryInfo, folderPath); // construct folder object for storage
+                    m_FolderLookup[folderSlot] = new SlotFolder(parentFolder, directoryInfo); // construct folder object for storage
                     return m_FolderLookup[folderSlot];
                 }
                 return null;
@@ -249,14 +321,14 @@ namespace BetterSave
             public static void PopulateFolder(SlotFolder slotFolder)
             {
                 // create header info stuff
-                createHeadingSlots(slotFolder, slotFolder.relativePath);
+                createHeadingSlots(slotFolder);
 
                 foreach (FileInfo fileInfo in slotFolder.directoryInfo.GetFiles("*" + SandboxLayout.SAVE_EXTENSION))
                 {
                     //instance.Logger.LogInfo($"found slot {fileInfo.Name}");
                     // standard processing for regular "slot" except it has to be put into the current folder
                     FileSlot fileSlot = slotFolder.m_FileLoader.AddSlot(
-                        Path.Combine(slotFolder.relativePath, fileInfo.Name),
+                        Path.Combine(slotFolder.absolutePath, fileInfo.Name),
                         fileInfo.LastWriteTime.Ticks,
                         Path.GetFileNameWithoutExtension(fileInfo.Name),
                         new FileSlot.OnClickedDelegate(slot => SandboxLoad_LocalSlotClickedCallback.Invoke(GameUI.m_Instance.m_LoadSandboxLayout, new object[] {slot})),
@@ -265,15 +337,15 @@ namespace BetterSave
                     
                     if (fileSlot)
                     {
-                        fileSlot.SetOnDeleteCallback(new FileSlot.OnClickedDelegate(slot => SandboxLoad_SlotDeleteCallback.Invoke(GameUI.m_Instance.m_LoadSandboxLayout, new object[] {slot}))); // TODO
-                        fileSlot.SetOnRenameCallback(new FileSlot.OnClickedDelegate(slot => SandboxLoad_SlotRenameCallback.Invoke(GameUI.m_Instance.m_LoadSandboxLayout, new object[] {slot}))); // TODO
+                        fileSlot.SetOnDeleteCallback(slot => DeleteSlot(slot, slotFolder));
+                        fileSlot.SetOnRenameCallback(slot => RenameSlot(slot));
                     }
                 }
 
                 foreach (DirectoryInfo dir in slotFolder.directoryInfo.GetDirectories())
                 {
                     // create links to other folders
-                    CreateFolder(dir, slotFolder.relativePath, slotFolder.m_FileLoader);
+                    CreateFolder(dir, slotFolder.m_FileLoader);
                 }
                 slotFolder.isPopulated = true;
             }
@@ -320,7 +392,11 @@ namespace BetterSave
                 }
 
                 foreach (DirectoryInfo info in directoryInfo.GetDirectories())
-                    LoadHandler.CreateFolder(info, "", __instance.m_FileLoader);
+                    LoadHandler.CreateFolder(info, __instance.m_FileLoader);
+                
+                if (LoadHandler.m_OpenSlot != null && openLastFolder.Value) {
+                    LoadHandler.SetContents(LoadHandler.m_OpenSlot, __instance); // "open" previous folder
+                }
             }
         }
 
@@ -328,18 +404,19 @@ namespace BetterSave
         {
             public static DateTime FarFuture = new DateTime(9999, 1, 1);
             public static Dictionary<FileSlot, SlotFolder> m_FolderLookup = new Dictionary<FileSlot, SlotFolder>();
+            public static FileSlot m_OpenSlot = null;
             public static FileSlot.OnHoverChangeDelegate hoverDelegate = new FileSlot.OnHoverChangeDelegate((slot, hover) => SandboxSave_SlotHoverCallback.Invoke(GameUI.m_Instance.m_SaveSandboxLayout, new object[] {slot, hover}));
             public static void setEditButtons(FileSlot slot, bool v)
             {
                 slot.m_RenameButton.gameObject.SetActive(v);
                 slot.m_DeleteButton.gameObject.SetActive(v);
             }
-            public static void createHeadingSlots(SlotFolder folder, string folderPath)
+            public static void createHeadingSlots(SlotFolder folder)
             {
                 FileSlot folderListing = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.absolutePath,
                     FarFuture.Ticks,
-                    $"\u200B\u200B\u200B<b>{folderPath}</b>",
+                    $"\u200B\u200B\u200B<b>{folder.Name}</b>",
                     (slot) => {},
                     (slot, hover) => {}
                 );
@@ -347,7 +424,7 @@ namespace BetterSave
                 setEditButtons(folderListing, false);
 
                 FileSlot refreshButton = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.absolutePath,
                     FarFuture.Ticks - 1,
                     "\u200B\u200B<color=yellow>Refresh</color>",
                     (slot) => {
@@ -361,7 +438,7 @@ namespace BetterSave
                 setEditButtons(folderListing, false);
 
                 FileSlot backButton = folder.m_FileLoader.AddSlot(
-                    folderPath,
+                    folder.Name,
                     FarFuture.Ticks - 2,
                     "\u200B<color=yellow>Back</color>",
                     (slot) => {
@@ -373,8 +450,6 @@ namespace BetterSave
 
                 setEditButtons(backButton, false);
 
-                // TODO: add [new folder] button and add [new layout button]
-
                 FileSlot newFolderBtn = folder.m_FileLoader.AddSlot(
                     "",
                     FarFuture.Ticks - 3,
@@ -383,7 +458,7 @@ namespace BetterSave
                         PopupInputField.Display(
                             "Enter a folder name",
                             string.Empty,
-                            (name) => SaveHandler.MakeNewFolder(name, folderPath, folder.m_FileLoader)
+                            (name) => SaveHandler.MakeNewFolder(name, folder.absolutePath, folder.m_FileLoader)
                         );
                         
                     },
@@ -400,7 +475,7 @@ namespace BetterSave
                         PopupInputField.Display(
                             Localize.Get("UI_INPUTFIELD_SANDBOX_LAYOUT_NAME"),
                             string.Empty,
-                            (name) => GameUI.m_Instance.m_SaveSandboxLayout.SaveNew(Path.Combine(folderPath, name))
+                            (name) => SaveNewLayout(Path.Combine(folder.absolutePath, name))
                         );
                         
                     },
@@ -409,7 +484,7 @@ namespace BetterSave
 
             }
 
-            public static SlotFolder CreateFolder(DirectoryInfo directoryInfo, string folderPath, Panel_FileLoader parentFolder)
+            public static SlotFolder CreateFolder(DirectoryInfo directoryInfo, Panel_FileLoader parentFolder)
             {
                 if (parentFolder == null)
                 {
@@ -419,38 +494,34 @@ namespace BetterSave
                 instance.Logger.LogInfo($"scanning dir '{directoryInfo.Name}'");
                 //Debug.Log($"{directoryInfo == null} {parentFolder == null} {GameUI.m_Instance.m_SaveSandboxLayout == null}");
                 
-                var LocalSlotClickedCallback = new FileSlot.OnClickedDelegate(slot => {
+                var FolderOpenedCallback = new FileSlot.OnClickedDelegate(slot => {
                     if (!slot) return;
                     InterfaceAudio.Play("ui_menu_select");
                     SetContents(slot, GameUI.m_Instance.m_SaveSandboxLayout); // "open" the folder
+                    m_OpenSlot = slot;
                 });
 
-                var SlotHoverCallback = new FileSlot.OnHoverChangeDelegate((slot, hover) => {
+                var FolderHoverCallback = new FileSlot.OnHoverChangeDelegate((slot, hover) => {
                     SandboxSave_SlotHoverCallback.Invoke(GameUI.m_Instance.m_SaveSandboxLayout, new object[] {slot, hover});
                 });
 
-                var SlotDeleteCallback = new FileSlot.OnClickedDelegate(slot => {}); // TODO!!!
-                var SlotRenameCallback = new FileSlot.OnClickedDelegate(slot => {}); // TODO!!!
-
                 // make FolderSlot for this folder
                 FileSlot folderSlot = parentFolder.AddSlot(
-                    Path.Combine(folderPath, directoryInfo.Name),
+                    directoryInfo.FullName,
                     directoryInfo.LastWriteTime.Ticks,
-                    $"<b>[{directoryInfo.Name}]</b>",
-                    LocalSlotClickedCallback,
-                    SlotHoverCallback
+                    string.Format(SlotFolder.displayFormat, directoryInfo.Name),
+                    FolderOpenedCallback,
+                    FolderHoverCallback
                 );
-
-                folderPath = Path.Combine(folderPath, directoryInfo.Name);
 
                 if (folderSlot)
                 {
-                    folderSlot.SetOnDeleteCallback(SlotDeleteCallback); // TODO
-                    folderSlot.SetOnRenameCallback(SlotRenameCallback); // TODO
+                    folderSlot.SetOnDeleteCallback(slot => DeleteFolder(slot, m_FolderLookup[folderSlot]));
+                    folderSlot.SetOnRenameCallback(slot => RenameFolder(slot, m_FolderLookup[folderSlot]));
 
-                    setEditButtons(folderSlot, false);
+                    setEditButtons(folderSlot, true);
 
-                    m_FolderLookup[folderSlot] = new SlotFolder(parentFolder, directoryInfo, folderPath, isSave: true); // construct folder object for storage
+                    m_FolderLookup[folderSlot] = new SlotFolder(parentFolder, directoryInfo, isSave: true); // construct folder object for storage
                     return m_FolderLookup[folderSlot];
                 }
                 return null;
@@ -458,14 +529,14 @@ namespace BetterSave
             public static void PopulateFolder(SlotFolder slotFolder)
             {
                 // create header info stuff
-                createHeadingSlots(slotFolder, slotFolder.relativePath);
+                createHeadingSlots(slotFolder);
 
                 foreach (FileInfo fileInfo in slotFolder.directoryInfo.GetFiles("*" + SandboxLayout.SAVE_EXTENSION))
                 {
                     //instance.Logger.LogInfo($"found slot {fileInfo.Name}");
                     // standard processing for regular "slot" except it has to be put into the current folder
                     FileSlot fileSlot = slotFolder.m_FileLoader.AddSlot(
-                        Path.Combine(slotFolder.relativePath, fileInfo.Name),
+                        Path.Combine(slotFolder.absolutePath, fileInfo.Name),
                         fileInfo.LastWriteTime.Ticks,
                         Path.GetFileNameWithoutExtension(fileInfo.Name),
                         slot => {
@@ -479,15 +550,15 @@ namespace BetterSave
                     
                     if (fileSlot)
                     {
-                        fileSlot.SetOnDeleteCallback(new FileSlot.OnClickedDelegate(slot => SandboxSave_SlotDeleteCallback.Invoke(GameUI.m_Instance.m_SaveSandboxLayout, new object[] {slot}))); // TODO
-                        fileSlot.SetOnRenameCallback(new FileSlot.OnClickedDelegate(slot => SandboxSave_SlotRenameCallback.Invoke(GameUI.m_Instance.m_SaveSandboxLayout, new object[] {slot}))); // TODO
+                        fileSlot.SetOnDeleteCallback(slot => DeleteSlot(slot, slotFolder));
+                        fileSlot.SetOnRenameCallback(RenameSlot);
                     }
                 }
 
                 foreach (DirectoryInfo dir in slotFolder.directoryInfo.GetDirectories())
                 {
                     // create links to other folders
-                    CreateFolder(dir, slotFolder.relativePath, slotFolder.m_FileLoader);
+                    CreateFolder(dir, slotFolder.m_FileLoader);
                 }
                 slotFolder.isPopulated = true;
             }
@@ -518,8 +589,25 @@ namespace BetterSave
                 if (!Directory.Exists(loc))
                 {
                     var info = Directory.CreateDirectory(loc);
-                    CreateFolder(info, path, parentFolder);
+                    CreateFolder(info, parentFolder);
                 }
+            }
+
+            public static void SaveNewLayout(string path) {
+                var name = Path.GetFileName(path);
+                if (File.Exists(SandboxLayout.AddFileExtension(path)))
+                {
+                    PopUpMessage.Display(
+                        Localize.Get("POPUP_OVERWRITE_SLOT", name),
+                        () => {
+                            Sandbox.Save(name);
+                            GameUI.m_Instance.m_SaveSandboxLayout.gameObject.SetActive(false);
+                        }
+                    );
+                    return;
+                }
+                Sandbox.Save(name);
+                GameUI.m_Instance.m_SaveSandboxLayout.gameObject.SetActive(false);
             }
         }
 
@@ -542,9 +630,6 @@ namespace BetterSave
                     return;
                 }
 
-                // TODO: fix ordering, folders and new folder btn
-                //       are at the bottom of the list solve by doing a postfix maybe?
-
                 List<FileSlot> actualSlots = __instance.m_FileLoader.m_Slots.GetRange(1, __instance.m_FileLoader.m_Slots.Count - 1);
                 __instance.m_FileLoader.m_Slots.RemoveRange(1, __instance.m_FileLoader.m_Slots.Count - 1);
 
@@ -566,7 +651,7 @@ namespace BetterSave
 	            
 
                 foreach (DirectoryInfo info in directoryInfo.GetDirectories())
-                    SaveHandler.CreateFolder(info, "", __instance.m_FileLoader);
+                    SaveHandler.CreateFolder(info, __instance.m_FileLoader);
                 
                 // add back the actual files
                 __instance.m_FileLoader.m_Slots.AddRange(actualSlots);
@@ -575,6 +660,11 @@ namespace BetterSave
 		        {
 			        __instance.m_FileLoader.m_Slots[i].transform.SetSiblingIndex(i);
 		        }
+
+                // TODO: fix
+                if (SaveHandler.m_OpenSlot != null && openLastFolder.Value) {
+                    SaveHandler.SetContents(SaveHandler.m_OpenSlot, __instance); // "open" previous folder
+                }
             }
         }
     }
