@@ -25,6 +25,7 @@ namespace BetterSave
 
         public static BetterSave instance;
         public static ConfigEntry<bool> modEnabled, openLastFolder;
+        public static ConfigEntry<string> sandboxLocation;
         public static MethodInfo
             SandboxLoad_LocalSlotClickedCallback,
             SandboxLoad_SlotHoverCallback,
@@ -44,8 +45,9 @@ namespace BetterSave
             // Set this true if your mod effects physics or allows mods that you can't normally do.
             isCheat = false;
 
-            modEnabled = Config.Bind("Better Save Mod", "modEnabled", true, "Enable Mod");
+            modEnabled = Config.Bind("Better Save Mod", "Mod Enabled", true, "Enable Mod");
             openLastFolder = Config.Bind("Better Save Mod", "Open Last Folder", true);
+            sandboxLocation = Config.Bind("Better Save Mod", "Custom Sandbox Location", "");
             
             modEnabled.SettingChanged += onEnableDisable;
 
@@ -105,6 +107,17 @@ namespace BetterSave
                 SandboxSave_SlotDeleteCallback = typeof(Panel_SaveSandboxLayout).GetMethod("SlotDeleteCallback", BindingFlags.Instance | BindingFlags.NonPublic);
                 SandboxSave_SlotRenameCallback = typeof(Panel_LoadSandboxLayout).GetMethod("SlotRenameCallback", BindingFlags.Instance | BindingFlags.NonPublic);
             }
+        }
+
+        public static string GetInitialSavePath() {
+            if (
+                instance.shouldRun()
+                && !string.IsNullOrEmpty(sandboxLocation.Value)
+                && Directory.Exists(sandboxLocation.Value)
+            ) {
+                return sandboxLocation.Value;
+            }
+            return SandboxLayout.GetSavePath();
         }
 
         public class SlotFolder {
@@ -255,7 +268,8 @@ namespace BetterSave
                     (slot) => {
                         InterfaceAudio.Play("ui_menu_select");
                         // TODO: OpenFolder(*parent path*)
-                        Populate(folder.Parent);
+                        if (folder.Parent.directoryInfo != null)
+                            Populate(folder.Parent);
                     },
                     hoverDelegate
                 );
@@ -309,7 +323,7 @@ namespace BetterSave
                 m_OpenFolder = slotFolder;
                 m_FileLoader.DestroySlots();
 
-                foreach (FileInfo fileInfo in slotFolder.directoryInfo.GetFiles("*" + SandboxLayout.SAVE_EXTENSION))
+                foreach (FileInfo fileInfo in slotFolder.directoryInfo.EnumerateFiles("*" + SandboxLayout.SAVE_EXTENSION))
                 {
                     //instance.Logger.LogInfo($"found slot {fileInfo.Name}");
                     // standard processing for regular "slot" except it has to be put into the current folder
@@ -328,7 +342,7 @@ namespace BetterSave
                     }
                 }
 
-                foreach (DirectoryInfo dir in slotFolder.directoryInfo.GetDirectories())
+                foreach (DirectoryInfo dir in slotFolder.directoryInfo.EnumerateDirectories())
                 {
                     // create links to other folders
                     CreateFileSlotFromFolder(new SlotFolder(dir));
@@ -361,7 +375,7 @@ namespace BetterSave
                 }
 
                 // default folder
-                string savePath = SandboxLayout.GetSavePath();
+                string savePath = GetInitialSavePath();
                 if (!Directory.Exists(savePath))
                 {
                     return;
@@ -448,7 +462,8 @@ namespace BetterSave
                     "\u200B<color=yellow>Back</color>",
                     (slot) => {
                         InterfaceAudio.Play("ui_menu_select");
-                        Populate(folder.Parent);
+                        if (folder.Parent.directoryInfo != null)
+                            Populate(folder.Parent);
                     },
                     hoverDelegate
                 );
@@ -539,7 +554,7 @@ namespace BetterSave
                 m_OpenFolder = slotFolder;
                 m_FileLoader.DestroySlots();
 
-                foreach (FileInfo fileInfo in slotFolder.directoryInfo.GetFiles("*" + SandboxLayout.SAVE_EXTENSION))
+                foreach (FileInfo fileInfo in slotFolder.directoryInfo.EnumerateFiles("*" + SandboxLayout.SAVE_EXTENSION))
                 {
                     //instance.Logger.LogInfo($"found slot {fileInfo.Name}");
                     // standard processing for regular "slot" except it has to be put into the current folder
@@ -558,7 +573,7 @@ namespace BetterSave
                     }
                 }
 
-                foreach (DirectoryInfo dir in slotFolder.directoryInfo.GetDirectories())
+                foreach (DirectoryInfo dir in slotFolder.directoryInfo.EnumerateDirectories())
                 {
                     // create links to other folders
                     CreateFileSlotFromFolder(new SlotFolder(dir));
@@ -624,7 +639,7 @@ namespace BetterSave
                 }
 
                 // default folder
-                string savePath = SandboxLayout.GetSavePath();
+                string savePath = GetInitialSavePath();
                 if (!Directory.Exists(savePath))
                 {
                     return;
