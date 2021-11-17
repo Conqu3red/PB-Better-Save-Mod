@@ -672,5 +672,25 @@ namespace BetterSave
                 return true;
             }
         }
+
+        [HarmonyPatch(typeof(Panel_TopBar), "OnQuickSave")]
+        public static class QuickSavePatch {
+            public static bool Prefix() {
+                if (instance.shouldRun()) {
+                    if (GameManager.GetGameMode() == GameMode.SANDBOX)
+                    {
+                        if (string.IsNullOrEmpty(Sandbox.m_CurrentLayoutName))
+                        {
+                            GameUI.m_Instance.m_SaveSandboxLayout.gameObject.SetActive(true);
+                        }
+                        else {
+                            SaveHandler.Save(Profile.m_LastLoadedSandbox, Sandbox.m_CurrentLayoutName);
+                        }
+                    }
+                    return false;
+                }
+                return true;
+            }
+        }
     }
 }
